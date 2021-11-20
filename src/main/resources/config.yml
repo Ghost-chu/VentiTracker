@@ -1,0 +1,10 @@
+keyword: "温迪"
+tag: ["温迪","原神"]
+open-in-browser: false
+period-time: 30000
+order: pubdate
+check-type:
+  - video
+#  - article
+#  - topic
+#  - photo
