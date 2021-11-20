@@ -1,6 +1,9 @@
 package com.ghostchu.ventitracker;
 
 import com.ghostchu.ventitracker.bean.ResponseBean;
+import com.ghostchu.ventitracker.event.MessagePushEvent;
+import com.ghostchu.ventitracker.event.VideoFoundEvent;
+import com.ghostchu.ventitracker.event.VideoSkippedEvent;
 import com.google.common.eventbus.EventBus;
 import de.leonhard.storage.LightningBuilder;
 import de.leonhard.storage.Yaml;
@@ -15,6 +18,7 @@ import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.*;
+
 public class Main {
     private static final SimpleDateFormat SIMPLE_DATE_FORMAT = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
     private static final Logger LOGGER = Logger.getLogger("Main");
@@ -23,82 +27,112 @@ public class Main {
             .fromFile(new File("config.yml"))
             .setReloadSettings(ReloadSettings.INTELLIGENT)
             .setConfigSettings(ConfigSettings.PRESERVE_COMMENTS)
-            .reloadCallback((file)-> LOGGER.info("检测到配置文件重载："+file.getFile().getAbsolutePath()))
+            .reloadCallback((file) -> LOGGER.info("检测到配置文件重载：" + file.getFile().getAbsolutePath()))
             .createYaml();
     private static final Yaml persist = LightningBuilder
             .fromFile(new File("persist.yml"))
-            .reloadCallback((file)-> LOGGER.info("检测到持久存储文件重载："+file.getFile().getAbsolutePath()))
+            .reloadCallback((file) -> LOGGER.info("检测到持久存储文件重载：" + file.getFile().getAbsolutePath()))
             .setReloadSettings(ReloadSettings.INTELLIGENT)
             .setConfigSettings(ConfigSettings.SKIP_COMMENTS)
             .createYaml();
     private static final Timer timer = new Timer();
+    private static final Main main = new Main();
+
     public static void main(String[] args) {
         LOGGER.info(" 我摊牌了 我就是喜欢温迪 - 新视频追踪器 - By Ghost_chu ");
         LOGGER.info(">> 注册并启动轮询线程");
-        long period = config.getOrSetDefault("period-time",30000);
+        long period = config.getOrSetDefault("period-time", 30000);
         timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                new Main().query();
+                main.query();
             }
-        },1000,period);
+        }, 1000, period);
         Scanner scan = new Scanner(System.in);
-
+        while (true) {
+            String command = scan.nextLine();
+            switch (command) {
+                case "stop":
+                    LOGGER.info("正在退出...");
+                    System.exit(0);
+                    break;
+                case "reload":
+                    config.forceReload();
+                    persist.forceReload();
+                    LOGGER.info("文件重载成功");
+                    break;
+                case "execute":
+                    LOGGER.info("正在执行强制查询任务，请稍后...");
+                    main.query();
+                    LOGGER.info("强制查询结束");
+                default:
+                    LOGGER.info("该命令不存在，当前可用命令：stop, reload, execute");
+            }
+        }
 
     }
-    public void query(){
-        String keyword = config.getOrSetDefault("keyword","温迪");
-        String order = config.getOrSetDefault("order","pubdate");
-        String FCTQUrl = config.getOrSetDefault("fctq","https://sctapi.ftqq.com/xxxxxx.send");
-        List<String> tagsNeeds = config.getOrSetDefault("tag",Collections.singletonList("温迪"));
-        boolean openInBrowser = config.getOrSetDefault("open-in-browser",false);
 
-            try{
-                ResponseBean bean = ApiHelper.executeSearchQuery(keyword,order);
-                List<ResponseBean.DataDTO.ResultDTO> videos = bean.getData().getResult();
-                // 获取存储的记录
-                List<String> persistList = persist.getStringList("records");
-                for(ResponseBean.DataDTO.ResultDTO video : videos){
-                    if(persistList.contains(video.getBvid())) continue;
-                    persistList.add(video.getBvid());;
+    public void query() {
+        String keyword = config.getOrSetDefault("keyword", "温迪");
+        String order = config.getOrSetDefault("order", "pubdate");
+        String FCTQUrl = config.getOrSetDefault("fctq", "https://sctapi.ftqq.com/xxxxxx.send");
+        List<String> tagsNeeds = config.getOrSetDefault("tag", Collections.singletonList("温迪"));
+        boolean openInBrowser = config.getOrSetDefault("open-in-browser", false);
 
-                    // 视频 Tag 过滤
-                    List<String> tagMissing = matchesTags(video.getTag(),tagsNeeds);
-                    if(!tagMissing.isEmpty()) {
-                        LOGGER.info("跳过视频：" + video.getTitle()+" 原因：没有所需要的视频标签："+list2String(tagMissing));
-                        LOGGER.info("跳过视频：" +video.getArcurl());
-                        continue;
-                    }
+        try {
+            ResponseBean bean = ApiHelper.executeSearchQuery(keyword, order);
+            List<ResponseBean.DataDTO.ResultDTO> videos = bean.getData().getResult();
+            // 获取存储的记录
+            List<String> persistList = persist.getStringList("records");
+            for (ResponseBean.DataDTO.ResultDTO video : videos) {
+                if (persistList.contains(video.getBvid())) continue;
+                persistList.add(video.getBvid());
 
-                    LOGGER.info(buildConsoleMessage(video));
-
-                    // 打开浏览器
-                    if(openInBrowser){
-                        openInBrowser(video.getArcurl());
-                    }
-
-                    // 发送Server酱推送
-                  sendServerPush(FCTQUrl, new FormBody.Builder()
-                          .add("title", video.getTitle())
-                          .add("desp", buildPushMessage(video))
-                          .build());
+                // 视频 Tag 过滤
+                List<String> tagMissing = matchesTags(video.getTag(), tagsNeeds);
+                if (!tagMissing.isEmpty()) {
+                    LOGGER.info("跳过视频：" + video.getTitle() + " 原因：没有所需要的视频标签：" + list2String(tagMissing));
+                    LOGGER.info("跳过视频：" + video.getArcurl());
+                    eventBus.post(new VideoSkippedEvent(video));
+                    continue;
                 }
-                persist.set("records",persistList);
 
-            }catch (IOException e){
-                LOGGER.error("在请求 BiliBili API 时出现错误",e);
-                return;
+                LOGGER.info(buildConsoleMessage(video));
+                eventBus.post(new VideoFoundEvent(video));
+                // 打开浏览器
+                if (openInBrowser) {
+                    openInBrowser(video.getArcurl());
+                }
+
+                // 发送Server酱推送
+                sendServerPush(FCTQUrl, new FormBody.Builder()
+                        .add("title", video.getTitle())
+                        .add("desp", buildPushMessage(video))
+                        .build());
             }
+            persist.set("records", persistList);
+
+        } catch (IOException e) {
+            LOGGER.error("在请求 BiliBili API 时出现错误", e);
+            return;
+        }
         LOGGER.info("查询结束 诶嘿~");
     }
 
-    public void sendServerPush(String FCTQUrl, RequestBody body){
-        if(FCTQUrl != null && !FCTQUrl.isEmpty()) {
-            createPost(FCTQUrl, body);
+    public void sendServerPush(String FCTQUrl, RequestBody body) {
+        if (FCTQUrl != null && !FCTQUrl.isEmpty()) {
+            try {
+                HttpUtil.makePost(FCTQUrl, body);
+                eventBus.post(new MessagePushEvent(true, null));
+            } catch (IOException e) {
+                LOGGER.warn("Failed to push message to FCTQ", e);
+                eventBus.post(new MessagePushEvent(false, e));
+            }
+
         }
     }
 
-    public void openInBrowser(String url){
+    public void openInBrowser(String url) {
         if (java.awt.Desktop.isDesktopSupported()) {
             try {
                 java.net.URI uri = java.net.URI.create(url);
@@ -112,42 +146,36 @@ public class Main {
         }
     }
 
-    public String buildConsoleMessage(ResponseBean.DataDTO.ResultDTO video){
-        return "诶嘿 发现了新视频：\n" + video.getTitle()+ "\n" +
+    public String buildConsoleMessage(ResponseBean.DataDTO.ResultDTO video) {
+        return "诶嘿 发现了新视频：\n" + video.getTitle() + "\n" +
                 "UP主：" + video.getAuthor() + "  " +
                 "播放量：" + video.getPlay() + "  " +
                 "弹幕：" + video.getReview() + "  " +
                 "收藏：" + video.getFavorites() + "\n" +
-                "标签：" +video.getTag()+"\n"+
+                "标签：" + video.getTag() + "\n" +
                 "地址：" + video.getArcurl();
     }
-    public String buildPushMessage(ResponseBean.DataDTO.ResultDTO video){
+
+    public String buildPushMessage(ResponseBean.DataDTO.ResultDTO video) {
         return "UP主：" + video.getAuthor() + "\n" +
                 "播放量：" + video.getPlay() + "\n" +
                 "弹幕：" + video.getReview() + "\n" +
                 "收藏：" + video.getFavorites() + "\n" +
-                "地址：" + video.getArcurl()+"\n"+
-                "标签：" +video.getTag()+"\n"+
-                "更新时间：" + SIMPLE_DATE_FORMAT.format(new Date(video.getPubdate()*1000));
+                "地址：" + video.getArcurl() + "\n" +
+                "标签：" + video.getTag() + "\n" +
+                "更新时间：" + SIMPLE_DATE_FORMAT.format(new Date(video.getPubdate() * 1000));
     }
 
-    public List<String> matchesTags(String tags, List<String> required){
+    public List<String> matchesTags(String tags, List<String> required) {
         List<String> missing = new ArrayList<>();
-        for(String tag : required){
-            if(!tags.contains(tag)) {
+        for (String tag : required) {
+            if (!tags.contains(tag)) {
                 missing.add(tag);
             }
         }
         return missing;
     }
 
-    public static void createPost(String url, RequestBody content){
-        try {
-            HttpUtil.makePost(url, content);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
 
     /**
      * Convert strList to String. E.g "Foo, Bar"
