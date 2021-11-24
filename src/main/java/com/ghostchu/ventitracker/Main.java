@@ -11,13 +11,13 @@ import de.leonhard.storage.internal.settings.ConfigSettings;
 import de.leonhard.storage.internal.settings.ReloadSettings;
 import okhttp3.FormBody;
 import okhttp3.RequestBody;
-import org.apache.log4j.Logger;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.logging.Logger;
 
 public class Main {
     private static final SimpleDateFormat SIMPLE_DATE_FORMAT = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
@@ -113,7 +113,7 @@ public class Main {
             persist.set("records", persistList);
 
         } catch (IOException e) {
-            LOGGER.error("在请求 BiliBili API 时出现错误", e);
+           e.printStackTrace();
             return;
         }
         LOGGER.info("查询结束 诶嘿~");
@@ -125,7 +125,7 @@ public class Main {
                 HttpUtil.makePost(FCTQUrl, body);
                 eventBus.post(new MessagePushEvent(true, null));
             } catch (IOException e) {
-                LOGGER.warn("Failed to push message to FCTQ", e);
+                e.printStackTrace();
                 eventBus.post(new MessagePushEvent(false, e));
             }
 
